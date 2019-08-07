@@ -20,16 +20,22 @@ uint32_t i, temp, voltage;
 
 void SendUSART (uint8_t *text);
 uint8_t TakeUSART  (void); 
+
 void LED_GREEN_ON  (void);
 void LED_GREEN_OFF (void);
 void LED_BLUE_ON   (void);
 void LED_BLUE_OFF  (void);
+
 void EXTI0_IRQHandler (void);
+void SysTick_Handler (void);
+
+uint8_t hour=0, minute=0, sec=0, flag_sec=0, count_sec=0;
 
 int main()
 {
 	uint32_t i, temp, voltage;
 	uint8_t command,  b=0;
+	
 	
 	
 	uint16_t  ADC_result, TS_result, Vdda, a, DAC_result;
@@ -61,6 +67,7 @@ int main()
 	
 	//TIM3 clocks
   RCC->APB1ENR |= RCC_APB1ENR_TIM3EN; 
+	
 	
 	
 
@@ -164,10 +171,11 @@ int main()
 	NVIC_EnableIRQ(TIM3_IRQn);
 	
 	/******************************************************************************/
-	
+	SystemCoreClockUpdate(); //update SystemCoreClock
 	
 	//SysTick config. f=10Hz T=100 ms
 	/******************************************************************************/
+	__enable_irq();	
 	SysTick_Config(SystemCoreClock/10);	
 	/******************************************************************************/
 		
@@ -185,7 +193,7 @@ int main()
 	EXTI->RTSR|=EXTI_RTSR_TR0; //rising edge trigger enabled for input line 0
 	/******************************************************************************/
 	
-	SystemCoreClockUpdate(); //update SystemCoreClock
+	
 		
   	// \n - переместить курсор на строку вниз 
 		// \r - переместить курсор в крайнее левое положение
@@ -209,6 +217,13 @@ int main()
 			
 while(1)
 { 
+	if (flag_sec==1)
+	{
+	flag_sec=0;
+		sprintf (txt_buf, "\n\rSTM32l152RC работает %d часов %d минут %d секунд",hour, minute, sec);	
+		SendUSART ((uint8_t*) txt_buf);
+		
+	}	
 	/*
 	if (GPIOA->IDR & GPIO_IDR_IDR_0)
 	{
@@ -324,12 +339,34 @@ while(1)
 
 void EXTI0_IRQHandler (void)
 	{
-	uint32_t i;
+	
 	LED_GREEN_ON ();	
 	for (i=0;i<300000;++i);
 	LED_GREEN_OFF ();	
 	EXTI->PR|=EXTI_PR_PR0;	
 	}	
+	
+void SysTick_Handler (void)
+{
+ count_sec++;
+ if (count_sec==10)
+ {
+ count_sec=0;	 
+ flag_sec=1;
+ sec++;	
+ if (sec==60)
+  {
+   minute++;
+	 sec=0;	
+   if (minute==60)
+   {
+   hour++;
+	 minute=0;
+	 } 		 
+	}
+ }	
+}
+
 
 void SendUSART (uint8_t *text)
 {
@@ -337,7 +374,7 @@ void SendUSART (uint8_t *text)
 	{
 		//uint32_t i;
 		while(!(USART2->SR & USART_SR_TC)); //Transmission is complete
-		for (i=0;i<3000;++i);
+		//for (i=0;i<3000;++i);
 		USART2->DR = *text;	//write data
 		text++;		
 	}
