@@ -28,18 +28,19 @@ void LED_BLUE_OFF  (void);
 
 void EXTI0_IRQHandler (void);
 void SysTick_Handler (void);
+void TIM3_IRQHandler (void);
 
 uint8_t hour=0, minute=0, sec=0, flag_sec=0, count_sec=0;
 
-int main()
-{
 	uint32_t i, temp, voltage;
-	uint8_t command,  b=0;
-	
-	
-	
+	uint8_t command,  b=0, LED_mode=0;
+		
 	uint16_t  ADC_result, TS_result, Vdda, a, DAC_result;
 	uint16_t ADC_data, TS_data, Vrefint_data;
+
+int main()
+{
+
   
 	char txt_buf[200];
 	char DAC_buf[10];
@@ -68,7 +69,7 @@ int main()
 	//TIM3 clocks
   RCC->APB1ENR |= RCC_APB1ENR_TIM3EN; 
 	
-	
+	SystemCoreClockUpdate(); //update SystemCoreClock
 	
 
 	//GPIO LED init
@@ -86,8 +87,7 @@ int main()
 	GPIOA->OSPEEDR|=0; // Low Speed 
 	GPIOA->PUPDR|=GPIO_PUPDR_PUPDR6_1;// pull-down
 	/******************************************************************************/
-	
-	
+		
 	//GPIO MCO init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER8_1; //PA8=10 AF
@@ -96,8 +96,7 @@ int main()
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR8; // High Speed 
 	GPIOA->AFR[1]|=(GPIO_AFRH_AFRH8>>4);
 	/******************************************************************************/
-	
-	
+		
 	//GPIO USART init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER2_1|GPIO_MODER_MODER3_1; //PA2=10, PA3=10 AF
@@ -106,14 +105,12 @@ int main()
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR2|GPIO_OSPEEDER_OSPEEDR3; // High Speed 
 	GPIOA->AFR[0]|=((GPIO_AFRL_AFRL2 & (0x00000007<<8))|(GPIO_AFRL_AFRL3 & (0x00000007<<12))); //PA2, PA3 AF7
 	/******************************************************************************/
-	
-		
+			
 	//GPIO ADC init
 	/******************************************************************************/
 	GPIOA->MODER |=GPIO_MODER_MODER1; // analog function ch1, PA1
 	/******************************************************************************/
-	
-		
+			
 	//GPIO DAC init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER4|GPIO_MODER_MODER5; //PA4, PA5 Analog Function
@@ -121,7 +118,8 @@ int main()
 	GPIOA->PUPDR &= ~GPIO_PUPDR_PUPDR4 & ~GPIO_PUPDR_PUPDR5;// no pull
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR4|GPIO_OSPEEDER_OSPEEDR5; // High Speed 
 	/******************************************************************************/
-		
+	
+	
 	//USART config
 	/******************************************************************************/
 	USART2->CR1 |= USART_CR1_UE; //USART on
@@ -133,13 +131,11 @@ int main()
   USART2->CR1 |= USART_CR1_RE; //USART receiver on
 	/******************************************************************************/
 	
-	
 	//DAC config
 	/******************************************************************************/
   DAC->CR|=DAC_CR_EN1;
 	//DAC->CR|=DAC_CR_TSEL1; // 111-software trigger
 	/******************************************************************************/
-		
 	
 	//ADC config, injected channel ch1
 	/******************************************************************************/
@@ -157,33 +153,29 @@ int main()
   ADC1->SMPR3 |= ADC_SMPR3_SMP1; //sample time 384 cycles ch1=PA1, write when ADON=0 	
 	ADC1->SMPR2 |= ADC_SMPR2_SMP17 ; //sample time 384 cycles, ch17 (write when ADON=0)
 	ADC1->SMPR2 |= ADC_SMPR2_SMP16 ; //sample time 384 cycles, ch16 (write when ADON=0)
-	
-	
+		
 	ADC->CCR |=ADC_CCR_TSVREFE; //Temperature Sensor and VREFINT Enable 
 	ADC1->CR2 |= ADC_CR2_ADON; //ADC on
 	/******************************************************************************/
-	
-	
-	//TIM3 config
-	/******************************************************************************/
-	TIM3->PSC |= SystemCoreClock/1000-1; //f=1000 Hz
-	TIM3->CR1 |= TIM_CR1_ARPE; //Auto-reload preload enable
-	NVIC_EnableIRQ(TIM3_IRQn);
-	
-	/******************************************************************************/
-	SystemCoreClockUpdate(); //update SystemCoreClock
-	
-	//SysTick config. f=10Hz T=100 ms
-	/******************************************************************************/
-	__enable_irq();	
-	SysTick_Config(SystemCoreClock/10);	
-	/******************************************************************************/
 		
-	//NVIC config. 
+		//NVIC config. 
 	/******************************************************************************/
 	__enable_irq();	
 	//__disable_irq();	
 	NVIC_EnableIRQ(EXTI0_IRQn);		
+	NVIC_EnableIRQ(TIM3_IRQn);
+	/******************************************************************************/	
+		
+	//TIM3 config
+	/******************************************************************************/
+	TIM3->PSC |= SystemCoreClock/1000-1; //f=1000 Hz
+	TIM3->CR1 |= TIM_CR1_ARPE; //Auto-reload preload enable
+		
+	/******************************************************************************/
+		
+	//SysTick config. f=10Hz T=100 ms
+	/******************************************************************************/
+	SysTick_Config(SystemCoreClock/10);	
 	/******************************************************************************/
 	
 	//EXTI0 config. 
@@ -336,14 +328,31 @@ while(1)
 
 } //end main
 
+void TIM3_IRQHandler (void)
+ {
+	TIM3->SR |= TIM_SR_UIF;
+	 if (LED_mode) //first led mode ==1
+	 {
+   LED_GREEN_ON ();
+	 LED_BLUE_ON ();
+	 }
+   else  //second led mode ==0
+   {
+    if (GPIOB->ODR & GPIO_ODR_ODR_6) LED_BLUE_ON ();
+		else LED_BLUE_OFF ();
+		 
+		if (GPIOB->ODR & GPIO_ODR_ODR_7) LED_GREEN_ON ();
+		else LED_GREEN_OFF (); 
+	 }		 
+ }
+
 
 void EXTI0_IRQHandler (void)
 	{
-	
-	LED_GREEN_ON ();	
-	for (i=0;i<300000;++i);
-	LED_GREEN_OFF ();	
-	EXTI->PR|=EXTI_PR_PR0;	
+	EXTI->PR|=EXTI_PR_PR0;	//set 1 to leave from Handler
+	LED_GREEN_OFF ();
+	LED_BLUE_OFF ();
+	LED_mode= ~LED_mode;	
 	}	
 	
 void SysTick_Handler (void)
