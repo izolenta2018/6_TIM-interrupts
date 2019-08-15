@@ -2,9 +2,8 @@
 #include "stm32l1xx.h"
 #include <stdio.h>
 #include <string.h>
-uint32_t i, temp, voltage; 
 #define APBCLK   16000000UL
-#define BAUDRATE 115200UL
+#define BAUDRATE 9600UL
 
 #define TS_cal_30 ((uint16_t*) 0x1FF800FA)
 #define TS_cal_110 ((uint16_t*) 0x1FF800FE)
@@ -20,6 +19,7 @@ uint32_t i, temp, voltage;
 
 void SendUSART (uint8_t *text);
 uint8_t TakeUSART  (void); 
+uint8_t TakeUSART_wait  (void);
 
 void LED_GREEN_ON  (void);
 void LED_GREEN_OFF (void);
@@ -31,19 +31,16 @@ void SysTick_Handler (void);
 void TIM3_IRQHandler (void);
 
 uint8_t hour=0, minute=0, sec=0, flag_sec=0, count_sec=0;
-
-	uint32_t i, temp, voltage;
-	uint8_t command,  b=0, LED_mode=0;
-		
-	uint16_t  ADC_result, TS_result, Vdda, a, DAC_result;
-	uint16_t ADC_data, TS_data, Vrefint_data;
+uint8_t led_mode=0;
 
 int main()
 {
-
-  
-	char txt_buf[200];
-	char DAC_buf[10];
+	uint8_t i=0; //counter of the received bytes
+	uint8_t input_ok=0; //sign of successful input
+	uint32_t tim_count;
+	
+  char buf[10];
+	char text_buf[200];
 	
 	RCC->CR|=RCC_CR_HSION; //HSI on
 	RCC->CFGR|=RCC_CFGR_MCO_DIV2|RCC_CFGR_MCO_SYSCLK|RCC_CFGR_SW_0|RCC_CFGR_PPRE1_DIV1; //MCO is divided by 2; SYSCLK clock selected; PCLK1 not divided; HSI used as system clock
@@ -56,12 +53,7 @@ int main()
 		
 	//USART2 clocks
 	RCC->APB1ENR |= RCC_APB1ENR_USART2EN;	
-	
-	//ADC clocks
-	RCC->APB2ENR |= RCC_APB2ENR_ADC1EN;
 
-  //DAC clocks
-  RCC->APB1ENR |= RCC_APB1ENR_DACEN; 
 	
 	//SYSCFG clocks
 	RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
@@ -69,7 +61,7 @@ int main()
 	//TIM3 clocks
   RCC->APB1ENR |= RCC_APB1ENR_TIM3EN; 
 	
-	SystemCoreClockUpdate(); //update SystemCoreClock
+	
 	
 
 	//GPIO LED init
@@ -87,7 +79,8 @@ int main()
 	GPIOA->OSPEEDR|=0; // Low Speed 
 	GPIOA->PUPDR|=GPIO_PUPDR_PUPDR6_1;// pull-down
 	/******************************************************************************/
-		
+	
+	
 	//GPIO MCO init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER8_1; //PA8=10 AF
@@ -96,7 +89,8 @@ int main()
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR8; // High Speed 
 	GPIOA->AFR[1]|=(GPIO_AFRH_AFRH8>>4);
 	/******************************************************************************/
-		
+	
+	
 	//GPIO USART init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER2_1|GPIO_MODER_MODER3_1; //PA2=10, PA3=10 AF
@@ -105,12 +99,14 @@ int main()
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR2|GPIO_OSPEEDER_OSPEEDR3; // High Speed 
 	GPIOA->AFR[0]|=((GPIO_AFRL_AFRL2 & (0x00000007<<8))|(GPIO_AFRL_AFRL3 & (0x00000007<<12))); //PA2, PA3 AF7
 	/******************************************************************************/
-			
+	
+		
 	//GPIO ADC init
 	/******************************************************************************/
 	GPIOA->MODER |=GPIO_MODER_MODER1; // analog function ch1, PA1
 	/******************************************************************************/
-			
+	
+		
 	//GPIO DAC init
 	/******************************************************************************/
 	GPIOA->MODER|=GPIO_MODER_MODER4|GPIO_MODER_MODER5; //PA4, PA5 Analog Function
@@ -118,24 +114,26 @@ int main()
 	GPIOA->PUPDR &= ~GPIO_PUPDR_PUPDR4 & ~GPIO_PUPDR_PUPDR5;// no pull
 	GPIOA->OSPEEDR|=GPIO_OSPEEDER_OSPEEDR4|GPIO_OSPEEDER_OSPEEDR5; // High Speed 
 	/******************************************************************************/
-	
-	
+		
 	//USART config
 	/******************************************************************************/
 	USART2->CR1 |= USART_CR1_UE; //USART on
   USART2->CR1 |= USART_CR1_M;  // 8 bit
   USART2->CR2 &=~ USART_CR2_STOP; //1 stop bit
-  USART2->BRR =0x8b ; //APBCLK/BAUDRATE // 115200 baud
+  //USART2->BRR =0x8b ; //APBCLK/BAUDRATE // 115200 baud
+	USART2->BRR =APBCLK/BAUDRATE; //APBCLK/BAUDRATE // 115200 baud
 	USART2->CR1 &=~ USART_CR1_PCE; // parity bit disabled
   USART2->CR1 |= USART_CR1_TE; // USART transmitter  on 
   USART2->CR1 |= USART_CR1_RE; //USART receiver on
 	/******************************************************************************/
+	
 	
 	//DAC config
 	/******************************************************************************/
   DAC->CR|=DAC_CR_EN1;
 	//DAC->CR|=DAC_CR_TSEL1; // 111-software trigger
 	/******************************************************************************/
+		
 	
 	//ADC config, injected channel ch1
 	/******************************************************************************/
@@ -153,35 +151,38 @@ int main()
   ADC1->SMPR3 |= ADC_SMPR3_SMP1; //sample time 384 cycles ch1=PA1, write when ADON=0 	
 	ADC1->SMPR2 |= ADC_SMPR2_SMP17 ; //sample time 384 cycles, ch17 (write when ADON=0)
 	ADC1->SMPR2 |= ADC_SMPR2_SMP16 ; //sample time 384 cycles, ch16 (write when ADON=0)
-		
+	
+	
 	ADC->CCR |=ADC_CCR_TSVREFE; //Temperature Sensor and VREFINT Enable 
 	ADC1->CR2 |= ADC_CR2_ADON; //ADC on
 	/******************************************************************************/
+	
+	
+	//TIM3 config
+	/******************************************************************************/
+	TIM3->PSC |= (SystemCoreClock/1000)-1; //f=1000 Hz, 1 ms
+	TIM3->CR1 |= TIM_CR1_ARPE; //Auto-reload preload enable
+	NVIC_EnableIRQ(TIM3_IRQn);
+	
+	/******************************************************************************/
+	SystemCoreClockUpdate(); //update SystemCoreClock
+	
+	//SysTick config. f=10Hz T=100 ms
+	/******************************************************************************/
+		SysTick_Config(SystemCoreClock/10);	
+	/******************************************************************************/
 		
-		//NVIC config. 
+	//NVIC config. 
 	/******************************************************************************/
 	__enable_irq();	
 	//__disable_irq();	
 	NVIC_EnableIRQ(EXTI0_IRQn);		
-	NVIC_EnableIRQ(TIM3_IRQn);
-	/******************************************************************************/	
-		
-	//TIM3 config
-	/******************************************************************************/
-	TIM3->PSC |= SystemCoreClock/1000-1; //f=1000 Hz
-	TIM3->CR1 |= TIM_CR1_ARPE; //Auto-reload preload enable
-		
-	/******************************************************************************/
-		
-	//SysTick config. f=10Hz T=100 ms
-	/******************************************************************************/
-	SysTick_Config(SystemCoreClock/10);	
 	/******************************************************************************/
 	
 	//EXTI0 config. 
 	/******************************************************************************/
 	SYSCFG->EXTICR[0]|=SYSCFG_EXTICR1_EXTI0_PA;//EXTI PA0 configuration
-  EXTI->IMR|=EXTI_IMR_MR0; //interrupt request from Line 0 is not masked
+  
 	EXTI->RTSR|=EXTI_RTSR_TR0; //rising edge trigger enabled for input line 0
 	/******************************************************************************/
 	
@@ -197,130 +198,58 @@ int main()
 		SendUSART((uint8_t *)"|                             | \n\r");
     SendUSART((uint8_t *)"|STM32l152RCT6 ready for work | \n\r");
 		SendUSART((uint8_t *)"|_____________________________| \n\r");
-		//for (i=0;i<200000;++i) {};	
-    SendUSART((uint8_t *)"<Каллибровочные константы> нажмите z \n\r<Показания с каналов АЦП> нажмите x\n\r");
+		SendUSART((uint8_t *)"<Каллибровочные константы> нажмите z \n\r<Показания с каналов АЦП> нажмите x\n\r");
 		SendUSART((uint8_t *)"<Помигать светодиодами> понажимайте q,w,e,r\n\r");
-		//for (i=0;i<200000;++i) {};		
-		SendUSART ((uint8_t*) "\n\rВведите желаемое напряжение от 0 до 3000 мВ и нажмите Enter ");	
-		sprintf (txt_buf, "\n\rSystemCoreClock=%d",SystemCoreClock);
-    SendUSART ((uint8_t*) txt_buf);	
+		sprintf (text_buf, "\n\rSystemCoreClock=%d",SystemCoreClock);
+    SendUSART ((uint8_t*) text_buf);	
 
-	
+	i=0;
+	while (!input_ok)
+	{
+		if (i==0) SendUSART ((uint8_t *) "\n\rВведите значение задержки мигания в миллисекундах от 0 до 65535 "); 	
+		buf[i] = TakeUSART_wait(); 
+		if (buf[i]==Enter)
+		{
+			buf[i]=0; //значение кода конца строки(нуль-терминатора /0)	равно 0 
+			sscanf(buf, "%d", &tim_count);
+			sprintf (text_buf, "\n\rВведено время задержки %d миллисекунд, пишем его в регистр TIM3_ARR\n\r", tim_count);
+			SendUSART ((uint8_t *) text_buf);
+			TIM3->ARR = tim_count; //maximum value
+			TIM3->CNT = 0;
+			TIM3->DIER |= TIM_DIER_UIE; //Update interrupt enable TIM3, при переполнении
+			TIM3->CR1 |= TIM_CR1_CEN; //start TIM3
+			EXTI->IMR|=EXTI_IMR_MR0; //interrupt request from Line 0 is not masked, разрешить прерывания EXTI
+			
+			input_ok=1; //разрешить выход из цикла ввода
+		}
+		else //не Enter
+		{
+     if (i>4 || buf[i]<'0' || buf[i]>'9') 
+		 { 
+		  SendUSART ((uint8_t*) "\n\rНедопустимый ввод");
+		  i=0;
+      buf[0]=0;
+		 }
+		 else 
+     {
+			if (USART2->SR & USART_SR_TC)
+			{	
+      USART2->DR = buf[i]; //вывод эхо=принтого байта
+      i++;
+			}				
+		 } 			 
+		}			
+	}
 			
 while(1)
 { 
 	if (flag_sec==1)
 	{
 	flag_sec=0;
-		sprintf (txt_buf, "\n\rSTM32l152RC работает %d часов %d минут %d секунд",hour, minute, sec);	
-		SendUSART ((uint8_t*) txt_buf);
-		
+		sprintf (text_buf, "\n\rSTM32l152RC работает %d часов %d минут %d секунд",hour, minute, sec);	
+		SendUSART ((uint8_t*) text_buf);
 	}	
-	/*
-	if (GPIOA->IDR & GPIO_IDR_IDR_0)
-	{
-   LED_GREEN_ON ();
-	}		
-	*/
-	
-    /* 	
-	  ADC1->CR2 |= ADC_CR2_JSWSTART; //start ADC, inj ch
-	     
-	  if  (ADC1->SR & ADC_SR_JEOC) //wait of JEOC
-		{			
-	  Vrefint_data = ADC1->JDR1;
-	  Vdda = ((*Vref_int_cal) * 3000)/Vrefint_data;
-	  }	
-		
-	  if  (ADC1->SR & ADC_SR_JEOC) //wait of JEOC
-		{			
-	  TS_data = ADC1->JDR2;
-		TS_result = 80*(TS_data-(*TS_cal_30))/((*TS_cal_110)-(*TS_cal_30))+30; 
-	  }				
-			
-	  if  (ADC1->SR & ADC_SR_JEOC) //wait of JEOC
-		{			
-	  ADC_data = ADC1->JDR3;
-	  ADC_result = (Vdda*ADC_data)/4095;
-	  }		
-	 
-		
-	
-	command = TakeUSART();
-			switch(command)
-			{
-				case led_green_on:
-				  LED_GREEN_ON();
-				  SendUSART((uint8_t *)"\n\rLed green ON");
-				break;
-				case led_green_off:
-					LED_GREEN_OFF();
-				  SendUSART((uint8_t *)"\n\rLed green OFF");
-				break;
-				case led_blue_on:
-					LED_BLUE_ON();
-				  SendUSART((uint8_t *)"\n\rLed blue ON");
-				break;
-				case led_blue_off:
-					LED_BLUE_OFF();
-				  SendUSART((uint8_t *)"\n\rLed blue OFF");	
-				break;
-				case 'z':
-				SendUSART((uint8_t *)"\n\r___Каллибровочные константы___");	
-				sprintf (txt_buf, "\n\rTS_cal_30=%d \n\rTS_cal_110=%d \n\rVref_int_cal=%d",*TS_cal_30, *TS_cal_110, *Vref_int_cal);	
-				SendUSART((uint8_t *)txt_buf);	
-				SendUSART ((uint8_t*) "\n\rВведите желаемое напряжение от 0 до 3000 мВ и нажмите Enter ");	
-				break;
-				case 'x':
-				SendUSART((uint8_t *)"\n\r___Коды каналов АЦП___");		
-				sprintf (txt_buf, "\n\rADC_data=%d",ADC_data);
-				SendUSART ((uint8_t*) txt_buf);	
-				sprintf (txt_buf, "\n\rTS_data=%d",TS_data);
-				SendUSART ((uint8_t*) txt_buf);	
-				sprintf (txt_buf, "\n\rVrefint_data=%d",Vrefint_data);
-				SendUSART ((uint8_t*) txt_buf); 
-        SendUSART((uint8_t *)"\n\r___Показания с каналов АЦП___");					
-        sprintf (txt_buf, "\n\rТекущее аналоговое напряжение АЦП Vdda=%d мВ",Vdda);
-				SendUSART ((uint8_t*) txt_buf); 
-				sprintf (txt_buf, "\n\rТемпература на кристалле TS=%d град.",TS_result);
-				SendUSART ((uint8_t*) txt_buf); 
-				sprintf (txt_buf, "\n\rНапряжение на АЦП U=%d мВ",ADC_result);
-				SendUSART ((uint8_t*) txt_buf); 
-				SendUSART ((uint8_t*) "\n\rВведите желаемое напряжение от 0 до 3000 мВ и нажмите Enter ");	
-				break;
-			}
-  
-	if (command>='0' && command<='9'|| command==Enter)
-	  {				
-		 DAC_buf[b]=command; //запись в массив цифры
-		 sprintf (txt_buf, "%c",command); //вывод введеной цифры
-		 SendUSART ((uint8_t*) txt_buf);	//вывод введеной цифры 
-     ++b;
-				
-		
-		 if (b>4 && command!=Enter) //проверка инкремента массива
-		 {
-			 SendUSART((uint8_t *)"\n\rнедопустимый ввод, введите заново\n\r ");
-       b=0;
-		 }		
 
-		 
-     if (command == Enter)	
-     {
-			//DAC-ADC conversion 
-     sscanf (DAC_buf,"%d",&voltage); 
-		 DAC->DHR12R1=voltage*4095/Vdda;
-			 
-     sprintf (txt_buf, "\n\rКод ЦАП %d",DAC->DOR1);
-		 SendUSART ((uint8_t*) txt_buf);  
-			 
-		 SendUSART ((uint8_t*) "\n\rВведите желаемое напряжение   и нажмите Enter ");	 
-		 b=0;      		 
-     } 			 
-			
-	}
-		*/	
-	  
 		
 			
 	
@@ -329,30 +258,28 @@ while(1)
 } //end main
 
 void TIM3_IRQHandler (void)
+{	
+ TIM3->SR &=~ TIM_SR_UIF;
+ if (led_mode)
  {
-	TIM3->SR |= TIM_SR_UIF;
-	 if (LED_mode) //first led mode ==1
-	 {
-   LED_GREEN_ON ();
-	 LED_BLUE_ON ();
-	 }
-   else  //second led mode ==0
-   {
-    if (GPIOB->ODR & GPIO_ODR_ODR_6) LED_BLUE_ON ();
-		else LED_BLUE_OFF ();
-		 
-		if (GPIOB->ODR & GPIO_ODR_ODR_7) LED_GREEN_ON ();
-		else LED_GREEN_OFF (); 
-	 }		 
+  LED_GREEN_ON();
+	LED_BLUE_ON();
  }
-
-
+ else
+ {
+  if (GPIOB->ODR & GPIO_ODR_ODR_6) LED_BLUE_OFF(); 
+	else LED_BLUE_ON();
+	
+	if (GPIOB->ODR & GPIO_ODR_ODR_7) LED_GREEN_OFF(); 
+	else LED_GREEN_ON(); 
+ }	 
+}
 void EXTI0_IRQHandler (void)
 	{
-	EXTI->PR|=EXTI_PR_PR0;	//set 1 to leave from Handler
-	LED_GREEN_OFF ();
-	LED_BLUE_OFF ();
-	LED_mode= ~LED_mode;	
+	led_mode=~led_mode;
+	LED_BLUE_OFF();	
+	LED_GREEN_OFF();	
+	EXTI->PR|=EXTI_PR_PR0;	
 	}	
 	
 void SysTick_Handler (void)
